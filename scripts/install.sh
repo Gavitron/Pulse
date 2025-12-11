@@ -109,43 +109,43 @@ build_exec_args_array() {
 #
 # returns a lowercase token that should identify the system we're installing on
 identify_system() {
-    local FILE SYSID PLATFORM
+    local file sysid
 
-    for FILE in /etc/os-release /usr/lib/os-release; do
-        [[ -r "$FILE" ]] || continue
+    for file in /etc/os-release /usr/lib/os-release; do
+        [[ -r "$file" ]] || continue
 
-        if SYSID=$(grep -m1 -E '^ID=' "$FILE" 2>/dev/null); then
-            SYSID=${SYSID#ID=}
-        elif SYSID=$(grep -m1 -E '^ID_LIKE=' "$FILE" 2>/dev/null); then
-            SYSID=${SYSID#ID_LIKE=}
+        if sysid=$(grep -m1 -E '^ID=' "$file" 2>/dev/null); then
+            sysid=${sysid#ID=}
+        elif sysid=$(grep -m1 -E '^ID_LIKE=' "$file" 2>/dev/null); then
+            sysid=${sysid#ID_LIKE=}
         else
             continue
         fi
-        [[ -n "$SYSID" ]] && break
+        [[ -n "$sysid" ]] && break
     done
 
-    if [[ -z "$SYSID" ]] && SYSID=$(uname -s 2>/dev/null); then
-        case "$SYSID" in
+    if [[ -z "$sysid" ]] && sysid=$(uname -s 2>/dev/null); then
+        case "$sysid" in
             Linux)
                 # Synology DSM detection
                 if [[ -r /etc.defaults/synoinfo.conf ]] && grep -q '^productname=' /etc.defaults/synoinfo.conf 2>/dev/null; then
-                    SYSID='synology'
+                    sysid='synology'
                 # Unraid
                 elif [[ -f /etc/unraid-version ]]; then
-                    SYSID='unraid'
+                    sysid='unraid'
                 # Slackware but not Unraid
                 elif [[ -f /etc/slackware-version ]]; then
-                    SYSID='slackware'
+                    sysid='slackware'
                 fi
                 # intentional fallthrough to catch truenas on debian:
             FreeBSD)
                 # Check if it's TrueNAS (should catch both CORE and SCALE)
                 if [[ -r /etc/platform ]] && grep -qiE 'freenas|truenas' /etc/platform 2>/dev/null; then
-                    SYSID='truenas'
+                    sysid='truenas'
                 fi
                 ;;
             CYGWIN_*|MINGW*)
-                SYSID='windows'
+                sysid='windows'
                 ;;
             Darwin|OpenBSD|NetBSD|DragonFly|SunOS|AIX|HP-UX|IRIX|*)
                 # covernig all the bases for future use cases
@@ -154,14 +154,50 @@ identify_system() {
     fi
 
     # final cleanup: truncate after the first token, strip quotes, and lowercase it
-    SYSID=$(echo "${SYSID%%[$' \t']*}" | tr -d '"' | tr '[:upper:]' '[:lower:]')
+    sysid=$(echo "${sysid%%[$' \t']*}" | tr -d '"' | tr '[:upper:]' '[:lower:]')
 
     # return in success
-    [[ -n "$SYSID" ]] && { printf '%s\n' "$SYSID"; return 0; }
+    [[ -n "$sysid" ]] && { printf '%s\n' "$sysid"; return 0; }
 
     # return in failure
     printf 'unknown\n'
     return 1
+}
+
+identify_init() {
+    local sysid=$(identify_system)
+    local init="unknown"
+
+    case "$sysid" in
+        # we know these special cases, so pass them through
+        synology|truenas|unraid|flatcar|darwin)
+            init="$sysid"
+            ;;
+        # these are known to be systemd
+        ubuntu|debian|fedora|centos|rhel|arch)
+            init="systemd"
+            ;;
+        # these are known to be openrc
+        alpine|gentoo|artix)
+            init="openrc"
+            ;;
+        # bsd & slackware
+        slackware|*bsd)
+            init="bsd"
+            ;;
+        # try to catch the ones we don't know explicitly
+        *)
+            if [[ -d /run/systemd/system ]]; then
+                init="systemd"
+            elif [[ -d /run/openrc ]] || [[ -f /etc/init.d/rcS ]]; then
+                init="openrc"
+            fi
+            ;;
+    esac
+
+    # return our findings
+    printf '%s\n' "$init"
+    [[ "$init" != "unknown" ]]
 }
 
 # Check if we can write to ${INSTALL_DIR} (catches *some* immutable filesystems like TrueNAS)
@@ -325,6 +361,12 @@ if [[ "$(identify_system)" = "truenas" ]]; then
     INSTALL_DIR="$TRUENAS_STATE_DIR"
     LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
     log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
+elif [[ "$(identify_system)" = "flatcar" ]]; then
+    # flatcar is a coreos-based OS with an immutable system, and persistence under /opt/
+    TRUENAS=true
+    INSTALL_DIR="$TRUENAS_STATE_DIR"
+    LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
+    log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
 elif [[ "$(uname -s)" == "Linux" ]] && [[ -d /data ]] && ! is_install_dir_writable; then
     # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
     TRUENAS=true
