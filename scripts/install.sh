@@ -105,35 +105,9 @@ build_exec_args_array() {
 
 # --- OS Detection Helpers ---
 
-# Check if we can write to ${INSTALL_DIR} (catches *some* immutable filesystems like TrueNAS)
-is_install_dir_writable() {
-    local test_file="${INSTALL_DIR}/.pulse-write-test-$$"
-    if touch "$test_file" 2>/dev/null; then
-        rm -f "$test_file" 2>/dev/null
-        return 0
-    fi
-    return 1
-}
-
-# TrueNAS SCALE
-is_truenas_scale() {
-    if [[ -f /etc/truenas-version ]]; then
-        return 0
-    fi
-    if [[ -f /etc/version ]] && grep -qi "truenas" /etc/version 2>/dev/null; then
-        return 0
-    fi
-    if [[ -d /data/ix-applications ]] || [[ -d /etc/ix-apps.d ]]; then
-        return 0
-    fi
-    # Fallback: check if hostname contains "truenas" (common default hostname)
-    if hostname 2>/dev/null | grep -qi "truenas"; then
-        return 0
-    fi
-    return 1
-}
-
 # Consolidated OS/Platform detection
+#
+# returns a lowercase token that should identify the system we're installing on
 identify_system() {
     local FILE SYSID PLATFORM
 
@@ -190,6 +164,38 @@ identify_system() {
     return 1
 }
 
+# Check if we can write to ${INSTALL_DIR} (catches *some* immutable filesystems like TrueNAS)
+is_install_dir_writable() {
+    local test_file="${INSTALL_DIR}/.pulse-write-test-$$"
+    if touch "$test_file" 2>/dev/null; then
+        rm -f "$test_file" 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+# TrueNAS SCALE
+is_truenas_scale() {
+    [[ "$(identify_system)" = "truenas" ]]
+}
+
+legacy_truenas_check() {
+    if [[ -f /etc/truenas-version ]]; then
+        return 0
+    fi
+    if [[ -f /etc/version ]] && grep -qi "truenas" /etc/version 2>/dev/null; then
+        return 0
+    fi
+    if [[ -d /data/ix-applications ]] || [[ -d /etc/ix-apps.d ]]; then
+        return 0
+    fi
+    # Fallback: check if hostname contains "truenas" (common default hostname)
+    if hostname 2>/dev/null | grep -qi "truenas"; then
+        return 0
+    fi
+    return 1
+}
+
 # --- Parse Arguments ---
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -221,14 +227,14 @@ if [[ "$UNINSTALL" == "true" ]]; then
     fi
 
     # Launchd (macOS)
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$(identify_system)" = "darwin" ]]; then
         PLIST="/Library/LaunchDaemons/com.pulse.agent.plist"
         launchctl unload "$PLIST" 2>/dev/null || true
         rm -f "$PLIST"
     fi
 
     # Synology DSM (handles both DSM 7+ systemd and DSM 6.x upstart)
-    if [[ -d /usr/syno ]]; then
+    if [[ "$(identify_system)" = "synology" ]]; then
         # DSM 7+ uses systemd
         if [[ -f "/etc/systemd/system/${AGENT_NAME}.service" ]]; then
             systemctl stop "${AGENT_NAME}" 2>/dev/null || true
@@ -244,7 +250,7 @@ if [[ "$UNINSTALL" == "true" ]]; then
     fi
 
     # Unraid
-    if [[ -f /etc/unraid-version ]] || [[ -d /boot/config/plugins/pulse-agent ]]; then
+    if [[ "$(identify_system)" = "unraid" ]] [[ -d /boot/config/plugins/pulse-agent ]]; then
         log_info "Removing Unraid installation..."
         # Stop running agent
         pkill -f "pulse-agent" 2>/dev/null || true
@@ -261,7 +267,7 @@ if [[ "$UNINSTALL" == "true" ]]; then
     fi
 
     # TrueNAS SCALE
-    if [[ -d "$TRUENAS_STATE_DIR" ]] || [[ -f /etc/truenas-version ]]; then
+    if [[ "$(identify_system)" = "truenas" ]]; then
         log_info "Removing TrueNAS SCALE installation..."
         # Stop and disable service
         systemctl stop "${AGENT_NAME}" 2>/dev/null || true
@@ -314,19 +320,17 @@ fi
 
 # TrueNAS SCALE has an immutable root filesystem; ${INSTALL_DIR} is read-only,
 # so store everything in /data which persists across reboots and upgrades.
-if [[ "$(uname -s)" == "Linux" ]]; then
-    if is_truenas_scale; then
-        TRUENAS=true
-        INSTALL_DIR="$TRUENAS_STATE_DIR"
-        LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
-        log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
-    elif [[ -d /data ]] && ! is_install_dir_writable; then
-        # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
-        TRUENAS=true
-        INSTALL_DIR="$TRUENAS_STATE_DIR"
-        LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
-        log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
-    fi
+if [[ "$(identify_system)" = "truenas" ]]; then
+    TRUENAS=true
+    INSTALL_DIR="$TRUENAS_STATE_DIR"
+    LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
+    log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
+elif [[ "$(uname -s)" == "Linux" ]] && [[ -d /data ]] && ! is_install_dir_writable; then
+    # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
+    TRUENAS=true
+    INSTALL_DIR="$TRUENAS_STATE_DIR"
+    LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
+    log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
 fi
 
 # --- Download ---
@@ -366,15 +370,15 @@ if [[ ! -s "$TMP_BIN" ]]; then
 fi
 
 # Check if it's a valid executable (ELF for Linux, Mach-O for macOS)
-if [[ "$OS" == "linux" ]]; then
-    if ! head -c 4 "$TMP_BIN" | grep -q "ELF"; then
-        fail "Downloaded file is not a valid Linux executable."
-    fi
-elif [[ "$OS" == "darwin" ]]; then
+if [[ "$(identify_system)" = "darwin" ]]; then
     # Mach-O magic: feedface (32-bit) or feedfacf (64-bit) or cafebabe (universal)
     MAGIC=$(xxd -p -l 4 "$TMP_BIN" 2>/dev/null || head -c 4 "$TMP_BIN" | od -A n -t x1 | tr -d ' ')
     if [[ ! "$MAGIC" =~ ^(cffaedfe|cefaedfe|cafebabe|feedface|feedfacf) ]]; then
         fail "Downloaded file is not a valid macOS executable."
+    fi
+elif [[ "$OS" == "linux" ]]; then
+    if ! head -c 4 "$TMP_BIN" | grep -q "ELF"; then
+        fail "Downloaded file is not a valid Linux executable."
     fi
 fi
 
@@ -410,7 +414,7 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 # Legacy macOS
-if [[ "$OS" == "darwin" ]]; then
+if [[ "$(identify_system)" = "darwin" ]]; then
     if launchctl list | grep -q "com.pulse.host-agent"; then
         log_warn "Removing legacy com.pulse.host-agent..."
         launchctl unload /Library/LaunchDaemons/com.pulse.host-agent.plist 2>/dev/null || true
@@ -428,7 +432,7 @@ fi
 # --- Service Installation ---
 
 # 1. macOS (Launchd)
-if [[ "$OS" == "darwin" ]]; then
+if [[ "$(identify_system)" = "darwin" ]]; then
     PLIST="/Library/LaunchDaemons/com.pulse.agent.plist"
     log_info "Configuring Launchd service at $PLIST..."
 
@@ -494,7 +498,7 @@ fi
 
 # 2. Synology DSM
 # DSM 7+ uses systemd, DSM 6.x uses upstart
-if [[ -d /usr/syno ]] && [[ -f /etc/VERSION ]]; then
+if [[ "$(identify_system)" = "synology" ]]; then
     # Extract major version from /etc/VERSION
     DSM_MAJOR=$(grep 'majorversion=' /etc/VERSION | cut -d'"' -f2)
     log_info "Detected Synology DSM ${DSM_MAJOR}..."
@@ -552,7 +556,7 @@ fi
 
 # 3. Unraid (no init system - use /boot/config/go script)
 # Detect Unraid by /etc/unraid-version (preferred) or /boot/config/go with unraid markers
-if [[ -f /etc/unraid-version ]]; then
+if [[ "$(identify_system)" = "unraid" ]]; then
     log_info "Detected Unraid system..."
 
     # Unraid's /boot is FAT32 (no execute permission), so we store the binary there
@@ -647,7 +651,7 @@ fi
 # in /data and create an Init/Shutdown task to recreate the symlink on boot.
 # Note: /data may have exec=off on some TrueNAS systems. On TrueNAS SCALE 24.04+,
 # ${INSTALL_DIR} is also read-only. We try multiple runtime locations.
-if [[ "$TRUENAS" == true ]]; then
+if [[ "$(identify_system)" = "truenas" ]] || [[ "$TRUENAS" == true ]]; then
     log_info "Configuring TrueNAS SCALE installation..."
 
     # Create directories
