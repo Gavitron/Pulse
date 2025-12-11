@@ -226,7 +226,7 @@ if [[ ! "$INTERVAL" =~ ^[0-9]+[smh]?$ ]]; then
 fi
 
 # --- TrueNAS SCALE Detection ---
-# TrueNAS SCALE has an immutable root filesystem; /usr/local/bin is read-only.
+# TrueNAS SCALE has an immutable root filesystem; ${INSTALL_DIR} is read-only.
 # We store everything in /data which persists across reboots and upgrades.
 is_truenas_scale() {
     if [[ -f /etc/truenas-version ]]; then
@@ -245,7 +245,7 @@ is_truenas_scale() {
     return 1
 }
 
-# Check if we can write to /usr/local/bin (catches immutable filesystems like TrueNAS)
+# Check if we can write to ${INSTALL_DIR} (catches immutable filesystems like TrueNAS)
 is_install_dir_writable() {
     local test_file="${INSTALL_DIR}/.pulse-write-test-$$"
     if touch "$test_file" 2>/dev/null; then
@@ -261,11 +261,11 @@ if [[ "$(uname -s)" == "Linux" ]] && is_truenas_scale; then
     LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
     log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
 elif [[ "$(uname -s)" == "Linux" ]] && [[ -d /data ]] && ! is_install_dir_writable; then
-    # /usr/local/bin is read-only but /data exists - likely TrueNAS or similar immutable system
+    # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
     TRUENAS=true
     INSTALL_DIR="$TRUENAS_STATE_DIR"
     LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
-    log_info "Immutable filesystem detected (read-only /usr/local/bin). Using $TRUENAS_STATE_DIR for installation."
+    log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
 fi
 
 # --- Download ---
@@ -336,14 +336,14 @@ if command -v systemctl >/dev/null 2>&1; then
         systemctl stop pulse-host-agent 2>/dev/null || true
         systemctl disable pulse-host-agent 2>/dev/null || true
         rm -f /etc/systemd/system/pulse-host-agent.service
-        rm -f /usr/local/bin/pulse-host-agent
+        rm -f ${INSTALL_DIR}/pulse-host-agent
     fi
     if systemctl is-active --quiet pulse-docker-agent 2>/dev/null || systemctl is-enabled --quiet pulse-docker-agent 2>/dev/null; then
         log_warn "Removing legacy pulse-docker-agent..."
         systemctl stop pulse-docker-agent 2>/dev/null || true
         systemctl disable pulse-docker-agent 2>/dev/null || true
         rm -f /etc/systemd/system/pulse-docker-agent.service
-        rm -f /usr/local/bin/pulse-docker-agent
+        rm -f ${INSTALL_DIR}/pulse-docker-agent
     fi
     systemctl daemon-reload 2>/dev/null || true
 fi
@@ -354,13 +354,13 @@ if [[ "$OS" == "darwin" ]]; then
         log_warn "Removing legacy com.pulse.host-agent..."
         launchctl unload /Library/LaunchDaemons/com.pulse.host-agent.plist 2>/dev/null || true
         rm -f /Library/LaunchDaemons/com.pulse.host-agent.plist
-        rm -f /usr/local/bin/pulse-host-agent
+        rm -f ${INSTALL_DIR}/pulse-host-agent
     fi
     if launchctl list | grep -q "com.pulse.docker-agent"; then
         log_warn "Removing legacy com.pulse.docker-agent..."
         launchctl unload /Library/LaunchDaemons/com.pulse.docker-agent.plist 2>/dev/null || true
         rm -f /Library/LaunchDaemons/com.pulse.docker-agent.plist
-        rm -f /usr/local/bin/pulse-docker-agent
+        rm -f ${INSTALL_DIR}/pulse-docker-agent
     fi
 fi
 
@@ -495,7 +495,7 @@ if [[ -f /etc/unraid-version ]]; then
     log_info "Detected Unraid system..."
 
     # Unraid's /boot is FAT32 (no execute permission), so we store the binary there
-    # for persistence but copy it to RAM disk (/usr/local/bin) for execution
+    # for persistence but copy it to RAM disk (${INSTALL_DIR}) for execution
     UNRAID_STORAGE_DIR="/boot/config/plugins/pulse-agent"
     UNRAID_STORED_BINARY="${UNRAID_STORAGE_DIR}/${BINARY_NAME}"
     RUNTIME_BINARY="${INSTALL_DIR}/${BINARY_NAME}"
@@ -505,7 +505,7 @@ if [[ -f /etc/unraid-version ]]; then
 
     # Copy binary to persistent storage (for survival across reboots)
     cp "${RUNTIME_BINARY}" "$UNRAID_STORED_BINARY"
-    # Keep binary in /usr/local/bin (RAM disk) with execute permission for runtime
+    # Keep binary in ${INSTALL_DIR} (RAM disk) with execute permission for runtime
     chmod +x "${RUNTIME_BINARY}"
 
     log_info "Installed binary to ${UNRAID_STORED_BINARY} (persistent) and ${RUNTIME_BINARY} (runtime)..."
@@ -518,13 +518,13 @@ if [[ -f /etc/unraid-version ]]; then
     log_info "Stopping any existing pulse agents..."
     # Use process name matching to avoid killing unrelated processes
     pkill -f "^${RUNTIME_BINARY}" 2>/dev/null || true
-    pkill -f "^/usr/local/bin/pulse-host-agent" 2>/dev/null || true
-    pkill -f "^/usr/local/bin/pulse-docker-agent" 2>/dev/null || true
+    pkill -f "^${INSTALL_DIR}/pulse-host-agent" 2>/dev/null || true
+    pkill -f "^${INSTALL_DIR}/pulse-docker-agent" 2>/dev/null || true
     sleep 2
 
     # Clean up legacy binaries from RAM disk
-    rm -f /usr/local/bin/pulse-host-agent 2>/dev/null || true
-    rm -f /usr/local/bin/pulse-docker-agent 2>/dev/null || true
+    rm -f ${INSTALL_DIR}/pulse-host-agent 2>/dev/null || true
+    rm -f ${INSTALL_DIR}/pulse-docker-agent 2>/dev/null || true
 
     # Create a wrapper script that will be called from /boot/config/go
     # This script copies from persistent storage to RAM disk on boot, then starts the agent
@@ -536,8 +536,8 @@ if [[ -f /etc/unraid-version ]]; then
 
 # Kill any existing pulse-agent processes
 pkill -f "^${RUNTIME_BINARY}" 2>/dev/null || true
-pkill -f "^/usr/local/bin/pulse-host-agent" 2>/dev/null || true
-pkill -f "^/usr/local/bin/pulse-docker-agent" 2>/dev/null || true
+pkill -f "^${INSTALL_DIR}/pulse-host-agent" 2>/dev/null || true
+pkill -f "^${INSTALL_DIR}/pulse-docker-agent" 2>/dev/null || true
 sleep 2
 
 # Copy binary from persistent storage to RAM disk (needed after reboot)
@@ -585,7 +585,7 @@ fi
 # TrueNAS SCALE wipes /etc/systemd/system on upgrades, so we store the service
 # in /data and create an Init/Shutdown task to recreate the symlink on boot.
 # Note: /data may have exec=off on some TrueNAS systems. On TrueNAS SCALE 24.04+,
-# /usr/local/bin is also read-only. We try multiple runtime locations.
+# ${INSTALL_DIR} is also read-only. We try multiple runtime locations.
 if [[ "$TRUENAS" == true ]]; then
     log_info "Configuring TrueNAS SCALE installation..."
 
@@ -605,7 +605,7 @@ if [[ "$TRUENAS" == true ]]; then
     chmod +x "$TRUENAS_STORED_BINARY"
 
     # Determine runtime binary location - try executing from /data first
-    # TrueNAS SCALE 24.04+ has read-only /usr/local/bin, so we need alternatives
+    # TrueNAS SCALE 24.04+ has read-only ${INSTALL_DIR}, so we need alternatives
     TRUENAS_RUNTIME_BINARY=""
 
     # Test if /data allows execution (no noexec mount option)
@@ -615,7 +615,7 @@ if [[ "$TRUENAS" == true ]]; then
     else
         # /data has noexec, need to copy to an executable location
         # Try locations in order of preference
-        for RUNTIME_DIR in "/usr/local/bin" "/root/bin" "/var/tmp"; do
+        for RUNTIME_DIR in "${INSTALL_DIR}" "/root/bin" "/var/tmp"; do
             if [[ "$RUNTIME_DIR" == "/root/bin" ]]; then
                 mkdir -p "$RUNTIME_DIR" 2>/dev/null || continue
             fi
@@ -636,7 +636,7 @@ if [[ "$TRUENAS" == true ]]; then
 
     if [[ -z "$TRUENAS_RUNTIME_BINARY" ]]; then
         log_error "Could not find a writable location that allows execution."
-        log_error "Tried: /data (noexec), /usr/local/bin (read-only), /root/bin, /var/tmp"
+        log_error "Tried: /data (noexec), ${INSTALL_DIR} (read-only), /root/bin, /var/tmp"
         exit 1
     fi
 
@@ -650,7 +650,7 @@ if [[ "$TRUENAS" == true ]]; then
     build_exec_args
 
     # Store service file in /data (persists across upgrades)
-    # Service uses /usr/local/bin path (runtime location)
+    # Service uses ${INSTALL_DIR} path (runtime location)
     TRUENAS_SERVICE_STORAGE="$TRUENAS_STATE_DIR/${AGENT_NAME}.service"
     cat > "$TRUENAS_SERVICE_STORAGE" <<EOF
 [Unit]
