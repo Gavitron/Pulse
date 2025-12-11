@@ -286,7 +286,7 @@ if [[ "$UNINSTALL" == "true" ]]; then
     fi
 
     # Unraid
-    if [[ "$(identify_system)" = "unraid" ]] [[ -d /boot/config/plugins/pulse-agent ]]; then
+    if [[ "$(identify_system)" = "unraid" ]] || [[ -d /boot/config/plugins/pulse-agent ]]; then
         log_info "Removing Unraid installation..."
         # Stop running agent
         pkill -f "pulse-agent" 2>/dev/null || true
