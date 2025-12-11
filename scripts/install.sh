@@ -7,11 +7,12 @@
 #   curl -fsSL http://pulse/install.sh | bash -s -- --url http://pulse --token <token> [options]
 #
 # Options:
-#   --enable-host       Enable host metrics (default: true)
-#   --enable-docker     Enable docker metrics (default: false)
-#   --interval <dur>    Reporting interval (default: 30s)
-#   --agent-id <id>     Custom agent identifier (default: auto-generated)
-#   --uninstall         Remove the agent
+#   --enable-host         Enable host metrics (default: true)
+#   --enable-docker       Enable docker metrics (default: false)
+#   --interval <dur>      Reporting interval (default: 30s)
+#   --agent-id <id>       Custom agent identifier (default: auto-generated)
+#   --install-dir <dir>   Custom directory in which to install the agent binary (default: /usr/local/bin)
+#   --uninstall           Remove the agent
 
 set -euo pipefail
 
@@ -115,6 +116,7 @@ while [[ $# -gt 0 ]]; do
         --insecure) INSECURE="true"; shift ;;
         --uninstall) UNINSTALL="true"; shift ;;
         --agent-id) AGENT_ID="$2"; shift 2 ;;
+        --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
