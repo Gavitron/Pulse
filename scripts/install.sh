@@ -133,6 +133,62 @@ is_truenas_scale() {
     return 1
 }
 
+# Consolidated OS/Platform detection
+identify_system() {
+    local FILE SYSID PLATFORM
+
+    for FILE in /etc/os-release /usr/lib/os-release; do
+        [[ -r "$FILE" ]] || continue
+
+        if SYSID=$(grep -m1 -E '^ID=' "$FILE" 2>/dev/null); then
+            SYSID=${SYSID#ID=}
+        elif SYSID=$(grep -m1 -E '^ID_LIKE=' "$FILE" 2>/dev/null); then
+            SYSID=${SYSID#ID_LIKE=}
+        else
+            continue
+        fi
+        [[ -n "$SYSID" ]] && break
+    done
+
+    if [[ -z "$SYSID" ]] && SYSID=$(uname -s 2>/dev/null); then
+        case "$SYSID" in
+            Linux)
+                # Synology DSM detection
+                if [[ -r /etc.defaults/synoinfo.conf ]] && grep -q '^productname=' /etc.defaults/synoinfo.conf 2>/dev/null; then
+                    SYSID='synology'
+                # Unraid
+                elif [[ -f /etc/unraid-version ]]; then
+                    SYSID='unraid'
+                # Slackware but not Unraid
+                elif [[ -f /etc/slackware-version ]]; then
+                    SYSID='slackware'
+                fi
+                # intentional fallthrough to catch truenas on debian:
+            FreeBSD)
+                # Check if it's TrueNAS (should catch both CORE and SCALE)
+                if [[ -r /etc/platform ]] && grep -qiE 'freenas|truenas' /etc/platform 2>/dev/null; then
+                    SYSID='truenas'
+                fi
+                ;;
+            CYGWIN_*|MINGW*)
+                SYSID='windows'
+                ;;
+            Darwin|OpenBSD|NetBSD|DragonFly|SunOS|AIX|HP-UX|IRIX|*)
+                # covernig all the bases for future use cases
+                ;;
+        esac
+    fi
+
+    # final cleanup: truncate after the first token, strip quotes, and lowercase it
+    SYSID=$(echo "${SYSID%%[$' \t']*}" | tr -d '"' | tr '[:upper:]' '[:lower:]')
+
+    # return in success
+    [[ -n "$SYSID" ]] && { printf '%s\n' "$SYSID"; return 0; }
+
+    # return in failure
+    printf 'unknown\n'
+    return 1
+}
 
 # --- Parse Arguments ---
 while [[ $# -gt 0 ]]; do
