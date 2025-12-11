@@ -103,6 +103,37 @@ build_exec_args_array() {
     if [[ -n "$AGENT_ID" ]]; then EXEC_ARGS_ARRAY+=(--agent-id "$AGENT_ID"); fi
 }
 
+# --- OS Detection Helpers ---
+
+# Check if we can write to ${INSTALL_DIR} (catches *some* immutable filesystems like TrueNAS)
+is_install_dir_writable() {
+    local test_file="${INSTALL_DIR}/.pulse-write-test-$$"
+    if touch "$test_file" 2>/dev/null; then
+        rm -f "$test_file" 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+# TrueNAS SCALE
+is_truenas_scale() {
+    if [[ -f /etc/truenas-version ]]; then
+        return 0
+    fi
+    if [[ -f /etc/version ]] && grep -qi "truenas" /etc/version 2>/dev/null; then
+        return 0
+    fi
+    if [[ -d /data/ix-applications ]] || [[ -d /etc/ix-apps.d ]]; then
+        return 0
+    fi
+    # Fallback: check if hostname contains "truenas" (common default hostname)
+    if hostname 2>/dev/null | grep -qi "truenas"; then
+        return 0
+    fi
+    return 1
+}
+
+
 # --- Parse Arguments ---
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -225,47 +256,21 @@ if [[ ! "$INTERVAL" =~ ^[0-9]+[smh]?$ ]]; then
     fail "Invalid interval format. Use format like '30s', '5m', or '1h'."
 fi
 
-# --- TrueNAS SCALE Detection ---
-# TrueNAS SCALE has an immutable root filesystem; ${INSTALL_DIR} is read-only.
-# We store everything in /data which persists across reboots and upgrades.
-is_truenas_scale() {
-    if [[ -f /etc/truenas-version ]]; then
-        return 0
+# TrueNAS SCALE has an immutable root filesystem; ${INSTALL_DIR} is read-only,
+# so store everything in /data which persists across reboots and upgrades.
+if [[ "$(uname -s)" == "Linux" ]]; then
+    if is_truenas_scale; then
+        TRUENAS=true
+        INSTALL_DIR="$TRUENAS_STATE_DIR"
+        LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
+        log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
+    elif [[ -d /data ]] && ! is_install_dir_writable; then
+        # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
+        TRUENAS=true
+        INSTALL_DIR="$TRUENAS_STATE_DIR"
+        LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
+        log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
     fi
-    if [[ -f /etc/version ]] && grep -qi "truenas" /etc/version 2>/dev/null; then
-        return 0
-    fi
-    if [[ -d /data/ix-applications ]] || [[ -d /etc/ix-apps.d ]]; then
-        return 0
-    fi
-    # Fallback: check if hostname contains "truenas" (common default hostname)
-    if hostname 2>/dev/null | grep -qi "truenas"; then
-        return 0
-    fi
-    return 1
-}
-
-# Check if we can write to ${INSTALL_DIR} (catches immutable filesystems like TrueNAS)
-is_install_dir_writable() {
-    local test_file="${INSTALL_DIR}/.pulse-write-test-$$"
-    if touch "$test_file" 2>/dev/null; then
-        rm -f "$test_file" 2>/dev/null
-        return 0
-    fi
-    return 1
-}
-
-if [[ "$(uname -s)" == "Linux" ]] && is_truenas_scale; then
-    TRUENAS=true
-    INSTALL_DIR="$TRUENAS_STATE_DIR"
-    LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
-    log_info "TrueNAS SCALE detected (immutable root). Using $TRUENAS_STATE_DIR for installation."
-elif [[ "$(uname -s)" == "Linux" ]] && [[ -d /data ]] && ! is_install_dir_writable; then
-    # ${INSTALL_DIR} is read-only but /data exists - likely TrueNAS or similar immutable system
-    TRUENAS=true
-    INSTALL_DIR="$TRUENAS_STATE_DIR"
-    LOG_FILE="$TRUENAS_LOG_DIR/${AGENT_NAME}.log"
-    log_info "Immutable filesystem detected (read-only ${INSTALL_DIR}). Using $TRUENAS_STATE_DIR for installation."
 fi
 
 # --- Download ---
